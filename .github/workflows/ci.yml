@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+    branches: [master, dev]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.25', '1.26']
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go ${{ matrix.go }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Verify gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Test (race + coverage)
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Build all platforms (static, zero-cgo)
+        run: |
+          for target in linux/amd64 linux/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            echo "Building $os/$arch"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -o /dev/null ./cmd/cephalote
+          done
+
+  treesitter:
+    name: Tier-2 (Tree-sitter, cgo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Build treesitter profile
+        run: CGO_ENABLED=1 go build -tags treesitter ./...
+      - name: Test treesitter profile
+        run: CGO_ENABLED=1 go test -tags treesitter ./...
+
+  release-check:
+    name: GoReleaser config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: latest
+          args: check
+
+  govulncheck:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...

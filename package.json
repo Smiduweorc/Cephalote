@@ -1,0 +1,19 @@
+{
+  "name": "cephalote",
+  "version": "0.0.0",
+  "description": "Dev tooling for Cephalote: git hooks, commit linting, and changelog generation. The shipped artifact is a Go binary — this manifest only wires up the release workflow.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "prepare": "lefthook install",
+    "changelog": "git-cliff -o CHANGELOG.md",
+    "changelog:unreleased": "git-cliff --unreleased --prepend CHANGELOG.md",
+    "release": "scripts/release.sh"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "git-cliff": "^2.13.1",
+    "lefthook": "^2.1.9"
+  }
+}

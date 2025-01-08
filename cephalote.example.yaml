@@ -1,0 +1,35 @@
+# Example Cephalote configuration. Pass with: cephalote scan . --config cephalote.example.yaml
+# Explicit command-line flags override the defaults set here.
+
+# Default minimum confidence to report (low|high). CLI --min-confidence wins.
+min_confidence: low
+
+# Scan files whose language can't be identified (CLI --include-unknown wins).
+include_unknown: false
+
+# Gitignore-style globs to skip. Patterns without a slash match by basename;
+# `*` matches within a path segment, `**` matches across segments.
+exclude:
+  - "testdata/**"
+  - "**/*.min.js"
+  - "third_party/**"
+
+rules:
+  # Silence specific rules or schemes entirely.
+  disable:
+    - weak-hash-sha1     # tier-1/2 rule id
+    - scheme:cbc         # tier-3 scheme id (prefix: "scheme:")
+
+  # Re-rate a rule's severity (critical|high|medium|low|info).
+  severity:
+    insecure-random: low
+
+# Project-specific detections, scanned at tier 3 (low confidence) like the
+# built-in catalog. Reported with id "scheme:<id>".
+custom_schemes:
+  - id: internal-xor-crypto
+    title: "Home-grown XOR cipher"
+    class: broken           # broken|weak|legacy|contextual|strong
+    note: "Internal XOR routine; not real encryption."
+    pattern: "(?i)\\bxor_(encrypt|decrypt)\\b"
+    remediation: "Use a vetted AEAD cipher (AES-GCM, ChaCha20-Poly1305)."
