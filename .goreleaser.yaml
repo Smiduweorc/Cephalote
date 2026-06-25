@@ -1,0 +1,72 @@
+version: 2
+
+project_name: cephalote
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: cephalote
+    main: ./cmd/cephalote
+    binary: cephalote
+    # Default profile: fully static, zero-cgo. The scp-to-server build.
+    # (The Tree-sitter tier needs cgo and is shipped separately, not here.)
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - cephalote.example.yaml
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+nfpms:
+  - id: packages
+    package_name: cephalote
+    maintainer: Smiduweorc
+    description: Scan source code for weak cryptographic schemes.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+
+source:
+  enabled: true
+
+release:
+  github:
+    owner: Smiduweorc
+    name: Cephalote
+  draft: false
+  prerelease: auto
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

@@ -1,0 +1,32 @@
+# Git hooks managed by lefthook (https://lefthook.dev).
+# Installed automatically by the "prepare" script when you run `npm install`
+# inside a git repository. YAML requires spaces for indentation (no tabs).
+#
+# This is a Go project: the pre-commit hooks run Go tooling, while commit-msg
+# enforces Conventional Commits so `npm run changelog` (git-cliff) stays usable.
+
+pre-commit:
+    parallel: true
+    commands:
+        fmt:
+            glob: "*.go"
+            run: gofmt -w {staged_files}
+            stage_fixed: true
+        vet:
+            glob: "*.go"
+            run: go vet ./...
+        tidy:
+            glob: "{go.mod,go.sum}"
+            run: go mod tidy && git diff --exit-code go.mod go.sum
+
+pre-push:
+    parallel: true
+    commands:
+        test:
+            glob: "*.go"
+            run: go test -race ./...
+
+commit-msg:
+    commands:
+        commitlint:
+            run: npx commitlint --edit {1}

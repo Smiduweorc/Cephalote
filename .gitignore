@@ -1,0 +1,19 @@
+# Build output
+/cephalote
+/dist/
+*.exe
+
+# Test / coverage artifacts
+coverage.out
+*.test
+
+# Node dev tooling (lefthook / commitlint / git-cliff)
+node_modules/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# intentionally weak codebase
+interior/
