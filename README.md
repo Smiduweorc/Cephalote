@@ -14,7 +14,7 @@ onto a server or into CI without fuss.
 go install github.com/Smiduweorc/Cephalote/cmd/cephalote@latest
 
 # Released binary (Linux/macOS, amd64/arm64)
-curl -sSfL https://raw.githubusercontent.com/Smiduweorc/Cephalote/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/Smiduweorc/Cephalote/master/install.sh | sh
 
 # Container (scratch image, ~static binary)
 docker run --rm -v "$PWD:/src:ro" ghcr.io/smiduweorc/cephalote scan /src

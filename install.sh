@@ -1,7 +1,7 @@
 #!/bin/sh
 # Cephalote installer: downloads the latest release binary for this platform.
 #
-#   curl -sSfL https://raw.githubusercontent.com/Smiduweorc/Cephalote/main/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/Smiduweorc/Cephalote/master/install.sh | sh
 #
 # Environment:
 #   CEPHALOTE_VERSION  release tag to install (default: latest)
