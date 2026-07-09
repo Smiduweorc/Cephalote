@@ -11,9 +11,9 @@
     "release": "scripts/release.sh"
   },
   "devDependencies": {
-    "@commitlint/cli": "^21.2.0",
+    "@commitlint/cli": "^21.2.1",
     "@commitlint/config-conventional": "^21.1.0",
     "git-cliff": "^2.13.1",
-    "lefthook": "^2.1.9"
+    "lefthook": "^2.1.10"
   }
 }
