@@ -1,0 +1,54 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      budget_seconds:
+        description: Per-target median wall-time budget (seconds)
+        default: '90'
+      runs:
+        description: Timed runs per target
+        default: '5'
+  push:
+    branches: [master, dev]
+    paths:
+      - scripts/bench.sh
+      - .github/workflows/bench.yml
+      - internal/**
+      - cmd/**
+      - go.mod
+      - go.sum
+  pull_request:
+    branches: [master, dev]
+    paths:
+      - scripts/bench.sh
+      - .github/workflows/bench.yml
+      - internal/**
+      - cmd/**
+      - go.mod
+      - go.sum
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Scan real-world repos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Build (treesitter profile, full parser fidelity)
+        run: CGO_ENABLED=1 go build -tags treesitter -o cephalote ./cmd/cephalote
+
+      - name: Benchmark against flask, django, openssl, gitea, kubernetes
+        env:
+          BUDGET_S: ${{ github.event.inputs.budget_seconds || '90' }}
+          RUNS: ${{ github.event.inputs.runs || '5' }}
+          BIN: ./cephalote
+        run: bash scripts/bench.sh
