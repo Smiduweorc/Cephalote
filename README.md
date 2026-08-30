@@ -9,6 +9,37 @@ onto a server or into CI without fuss.
 
 ## Install
 
+### Arch Linux (AUR)
+
+Cephalote is packaged on the AUR as [`cephalote`](https://aur.archlinux.org/packages/cephalote),
+built from source against the tagged release. With an AUR helper:
+
+```sh
+yay -S cephalote      # or: paru -S cephalote
+```
+
+Or manually, with `makepkg`:
+
+```sh
+git clone https://aur.archlinux.org/cephalote.git
+cd cephalote
+makepkg -si
+```
+
+The AUR package ships the **Tree-sitter** profile. The zero-cgo default exists
+so a single binary can be dropped onto a machine with no toolchain; a package
+that compiles on your own machine has no such constraint, so it takes the tier
+that detects more (see [Build profiles](#build-profiles-tree-sitter)). It
+installs the binary to `/usr/bin/cephalote`, shell completions for bash, zsh,
+and fish, and the annotated config plus scheduling guide under
+`/usr/share/doc/cephalote/`.
+
+To build the package straight from this repo instead of the AUR, run
+`makepkg -si` in the repo root; the [`PKGBUILD`](./PKGBUILD) here is the same
+one that's published.
+
+### Other platforms
+
 ```sh
 # Go toolchain
 go install github.com/Smiduweorc/Cephalote/cmd/cephalote@latest

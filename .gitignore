@@ -17,3 +17,6 @@ node_modules/
 
 # intentionally weak codebase
 interior/
+
+# Local AUR clone (its own git repo, pushed to aur.archlinux.org)
+/aur-cephalote/
