@@ -1,17 +1,20 @@
 //go:build treesitter
 
 // Package ts is the tier-2 Tree-sitter analyzer. This build (tag `treesitter`,
-// cgo enabled) provides real AST analysis for Python as the design's proof
-// language; more grammars slot in behind the same Analyze entry point.
+// cgo enabled) provides real AST analysis for every language in the registry
+// in lang_specs.go. The analyzer itself is language-agnostic: it walks the
+// tree, renders dotted names out of whatever nodes the grammar uses for them,
+// and matches those names against per-language tables. Adding a language means
+// adding a table entry, not an analyzer.
 package ts
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/python"
 
 	"github.com/Smiduweorc/Cephalote/internal/finding"
 	"github.com/Smiduweorc/Cephalote/internal/rules"
@@ -21,242 +24,163 @@ import (
 func Available() bool { return true }
 
 // Supported reports whether a grammar+ruleset exists for a language.
-func Supported(lang string) bool { return lang == "python" }
+func Supported(lang string) bool {
+	_, ok := specs[lang]
+	return ok
+}
 
 // Analyze runs the tier-2 analyzer for a supported language. Unsupported
-// languages return nil so the caller falls back to tier 3.
+// languages return nil so the caller falls back to tier 3. The path is used
+// both to label findings and to pick between dialect grammars (.ts vs .tsx).
 func Analyze(lang, path string, src []byte) ([]finding.Finding, error) {
-	if lang != "python" {
+	sp, ok := specs[lang]
+	if !ok {
 		return nil, nil
 	}
-	return analyzePython(path, src)
-}
-
-// pyTargets maps a dotted call/attribute suffix to the rule it triggers. These
-// are presence-based: seeing the construct at all is the finding. Suffix
-// matching means both `hashlib.md5(...)` and `Crypto.Cipher.DES.new(...)` work.
-var pyTargets = map[string]string{
-	// hashlib / pycryptodome / cryptography hashes
-	"hashlib.md5":  rules.MD5,
-	"hashlib.sha1": rules.SHA1,
-	"hashes.MD5":   rules.MD5,
-	"hashes.SHA1":  rules.SHA1,
-	"MD5.new":      rules.MD5,
-	"SHA1.new":     rules.SHA1,
-	// symmetric ciphers (pycryptodome / cryptography)
-	"DES.new":              rules.DES,
-	"DES3.new":             rules.TripleDES,
-	"ARC4.new":             rules.RC4,
-	"Blowfish.new":         rules.Blowfish,
-	"algorithms.TripleDES": rules.TripleDES,
-	"algorithms.ARC4":      rules.RC4,
-	"algorithms.Blowfish":  rules.Blowfish,
-	"modes.ECB":            rules.ECB,
-	// insecure randomness for secrets
-	"random.random":      rules.WeakRand,
-	"random.randint":     rules.WeakRand,
-	"random.randrange":   rules.WeakRand,
-	"random.getrandbits": rules.WeakRand,
-	"random.choice":      rules.WeakRand,
-	// deprecated transport
-	"ssl.PROTOCOL_TLSv1":   rules.WeakTLS,
-	"ssl.PROTOCOL_TLSv1_1": rules.WeakTLS,
-	"ssl.PROTOCOL_SSLv3":   rules.WeakTLS,
-	"ssl.PROTOCOL_SSLv2":   rules.WeakTLS,
-	"ssl.PROTOCOL_SSLv23":  rules.WeakTLS,
-}
-
-// weakHashNames maps the string argument of hashlib.new("md5") to a rule.
-var weakHashNames = map[string]string{
-	"md5": rules.MD5, "md4": rules.MD4, "sha1": rules.SHA1, "sha": rules.SHA1,
-}
-
-func analyzePython(path string, src []byte) ([]finding.Finding, error) {
 	parser := sitter.NewParser()
-	parser.SetLanguage(python.GetLanguage())
+	parser.SetLanguage(sp.syntax.language(path))
 	tree, err := parser.ParseCtx(context.Background(), nil, src)
 	if err != nil {
 		return nil, err
 	}
 	defer tree.Close()
-	root := tree.RootNode()
+	return sp.analyze(tree.RootNode(), path, src), nil
+}
+
+func (sp spec) analyze(root *sitter.Node, path string, src []byte) []finding.Finding {
 	lines := strings.Split(string(src), "\n")
 
-	// localImports maps a bound name to its canonical "module.name", so a bare
-	// `md5(...)` after `from hashlib import md5` resolves correctly.
-	localImports := collectFromImports(root, src)
+	// aliases resolves names bound by an import, so a bare `md5(...)` after
+	// `from hashlib import md5` matches the same table entry as `hashlib.md5`.
+	var aliases map[string]string
+	if sp.aliases != nil {
+		aliases = sp.aliases(root, src)
+	}
 
-	// Dedupe by (row, col, rule): an attribute and its enclosing call can both
-	// resolve to the same location.
+	// Nested nodes describe the same construct from different angles: an
+	// attribute and the call wrapping it share a start (`hashlib.md5(...)`),
+	// while a qualified name and its tail share an end (`CryptoPP::Weak::MD5`).
+	// Reporting a rule once per start and once per end collapses both without
+	// merging genuinely separate uses.
 	type key struct {
 		row, col uint32
 		rule     string
 	}
-	seen := map[key]bool{}
+	seenStart, seenEnd := map[key]bool{}, map[key]bool{}
 	var out []finding.Finding
-	emit := func(ruleID string, n *sitter.Node) {
-		p := n.StartPoint()
-		k := key{p.Row, p.Column, ruleID}
-		if seen[k] {
-			return
+	emit := func(ids []string, n *sitter.Node) {
+		start, end := n.StartPoint(), n.EndPoint()
+		for _, id := range ids {
+			ks := key{start.Row, start.Column, id}
+			ke := key{end.Row, end.Column, id}
+			if seenStart[ks] || seenEnd[ke] {
+				continue
+			}
+			seenStart[ks], seenEnd[ke] = true, true
+			out = append(out, mkFinding(id, path, int(start.Row)+1, int(start.Column)+1, lines))
 		}
-		seen[k] = true
-		out = append(out, mkFinding(ruleID, path, int(p.Row)+1, int(p.Column)+1, lines))
 	}
 
+	s := sp.syntax
 	walk(root, func(n *sitter.Node) {
-		switch n.Type() {
-		case "attribute":
-			if id, ok := suffixLookup(dotted(n, src)); ok {
-				emit(id, n)
-			}
-		case "call":
-			handleCall(n, src, localImports, emit)
-		}
-	})
-	return out, nil
-}
-
-// handleCall covers the value-dependent and bare-identifier cases that the
-// generic attribute pass cannot: RSA key size, hashlib.new("md5"), and calls to
-// names imported via `from ... import`.
-func handleCall(call *sitter.Node, src []byte, localImports map[string]string, emit func(string, *sitter.Node)) {
-	fn := call.ChildByFieldName("function")
-	if fn == nil {
-		return
-	}
-	switch fn.Type() {
-	case "identifier":
-		if canon, ok := localImports[fn.Content(src)]; ok {
-			if id, ok := pyTargets[canon]; ok {
-				emit(id, call)
+		t := n.Type()
+		_, isCall := s.call[t]
+		if _, isMember := s.member[t]; isMember && !isCall {
+			// A name used without calling it: `CipherMode.ECB`,
+			// `Digest::MD5`, `CryptoPP::Weak::MD5`.
+			if ids, ok := suffixLookup(sp.targets, s.dotted(n, src)); ok {
+				emit(ids, n)
 			}
 		}
-	case "attribute":
-		d := dotted(fn, src)
-		switch {
-		case suffixHas(d, "RSA.generate"):
-			if bits, ok := firstIntArg(call, src); ok && bits < 2048 {
-				emit(rules.RSASmall, call)
-			}
-		case suffixHas(d, "hashlib.new"):
-			if name, ok := firstStringArg(call, src); ok {
-				if id, ok := weakHashNames[strings.ToLower(name)]; ok {
-					emit(id, call)
-				}
-			}
-		}
-	}
-}
-
-// collectFromImports builds name -> "module.name" for `from M import a, b as c`.
-func collectFromImports(root *sitter.Node, src []byte) map[string]string {
-	m := map[string]string{}
-	walk(root, func(n *sitter.Node) {
-		if n.Type() != "import_from_statement" {
+		if !isCall {
 			return
 		}
-		modNode := n.ChildByFieldName("module_name")
-		if modNode == nil {
-			return
+		name := resolveAlias(s.calleeName(n, src), aliases)
+		if ids, ok := suffixLookup(sp.targets, name); ok {
+			emit(ids, n)
 		}
-		module := modNode.Content(src)
-		for i := 0; i < int(n.NamedChildCount()); i++ {
-			c := n.NamedChild(i)
-			if c.StartByte() <= modNode.EndByte() {
-				continue // this is the module_name itself (or before it)
+		if idx, ok := suffixLookup(sp.algoCalls, name); ok {
+			if str, ok := s.stringArg(s.args(n), idx, src); ok {
+				emit(classifyAlgorithm(str), n)
 			}
-			switch c.Type() {
-			case "dotted_name", "identifier":
-				name := c.Content(src)
-				m[name] = module + "." + name
-			case "aliased_import":
-				orig := c.ChildByFieldName("name")
-				alias := c.ChildByFieldName("alias")
-				if orig != nil && alias != nil {
-					m[alias.Content(src)] = module + "." + orig.Content(src)
-				}
+		}
+		if br, ok := suffixLookup(sp.bitsCalls, name); ok {
+			if bits, ok := s.minIntArg(s.args(n), src); ok && br.flags(bits) {
+				emit([]string{rules.RSASmall}, n)
 			}
 		}
 	})
-	return m
+	return out
 }
 
-// dotted renders an identifier/attribute chain as "a.b.c".
-func dotted(n *sitter.Node, src []byte) string {
-	switch n.Type() {
-	case "identifier", "dotted_name":
-		return n.Content(src)
-	case "attribute":
-		obj := n.ChildByFieldName("object")
-		attr := n.ChildByFieldName("attribute")
-		if obj == nil || attr == nil {
-			return n.Content(src)
-		}
-		return dotted(obj, src) + "." + attr.Content(src)
-	case "call":
-		if fn := n.ChildByFieldName("function"); fn != nil {
-			return dotted(fn, src)
-		}
-	}
-	return n.Content(src)
-}
-
-func suffixLookup(d string) (string, bool) {
-	if id, ok := pyTargets[d]; ok {
-		return id, true
-	}
-	for k, id := range pyTargets {
-		if suffixHas(d, k) {
-			return id, true
-		}
-	}
-	return "", false
-}
-
-// suffixHas reports whether dotted name d equals suffix or ends with ".suffix"
-// (component boundary), so "Crypto.Cipher.DES.new" matches "DES.new".
-func suffixHas(d, suffix string) bool {
-	return d == suffix || strings.HasSuffix(d, "."+suffix)
-}
-
-func firstIntArg(call *sitter.Node, src []byte) (int, bool) {
-	args := call.ChildByFieldName("arguments")
-	if args == nil {
-		return 0, false
-	}
-	for i := 0; i < int(args.NamedChildCount()); i++ {
-		c := args.NamedChild(i)
-		if c.Type() == "integer" {
-			n, err := strconv.Atoi(c.Content(src))
-			if err == nil {
-				return n, true
+// flags reports whether a key size is one this rule considers undersized.
+func (b bitsRule) flags(bits int) bool {
+	if len(b.only) > 0 {
+		for _, v := range b.only {
+			if v == bits {
+				return true
 			}
 		}
+		return false
 	}
-	return 0, false
+	return b.max > 0 && bits < b.max
 }
 
-func firstStringArg(call *sitter.Node, src []byte) (string, bool) {
-	args := call.ChildByFieldName("arguments")
-	if args == nil {
-		return "", false
+// resolveAlias rewrites an unqualified name to its imported canonical form.
+func resolveAlias(name string, aliases map[string]string) string {
+	if aliases == nil || strings.Contains(name, ".") {
+		return name
 	}
-	for i := 0; i < int(args.NamedChildCount()); i++ {
-		c := args.NamedChild(i)
-		if c.Type() == "string" {
-			return strings.Trim(c.Content(src), `"'`), true
+	if canon, ok := aliases[name]; ok {
+		return canon
+	}
+	return name
+}
+
+// suffixLookup finds the table entry for a dotted name, matching either the
+// whole name or a trailing run of its components, so that one entry covers
+// every way the name can be qualified: "DES.new" matches
+// `Crypto.Cipher.DES.new`. The longest matching key wins, which keeps the
+// result independent of map iteration order.
+func suffixLookup[T any](m map[string]T, dotted string) (T, bool) {
+	if v, ok := m[dotted]; ok {
+		return v, true
+	}
+	best := ""
+	for k := range m {
+		if len(k) > len(best) && strings.HasSuffix(dotted, "."+k) {
+			best = k
 		}
 	}
-	return "", false
+	if best == "" {
+		var zero T
+		return zero, false
+	}
+	return m[best], true
 }
 
-func walk(n *sitter.Node, fn func(*sitter.Node)) {
-	fn(n)
-	for i := 0; i < int(n.NamedChildCount()); i++ {
-		walk(n.NamedChild(i), fn)
+var errNotInt = errors.New("not an integer literal")
+
+// parseInt reads the decimal value of an integer literal, tolerating the digit
+// separators and type suffixes that some languages allow (1_024, 1024u32,
+// 1024L). Non-decimal literals are rejected rather than truncated to their
+// leading "0".
+func parseInt(s string) (int, error) {
+	s = strings.ReplaceAll(s, "_", "")
+	if len(s) > 1 && s[0] == '0' && !isDigit(s[1]) {
+		return 0, errNotInt // 0x..., 0b..., 0o...
 	}
+	i := 0
+	for i < len(s) && isDigit(s[i]) {
+		i++
+	}
+	if i == 0 {
+		return 0, errNotInt
+	}
+	return strconv.Atoi(s[:i])
 }
+
+func isDigit(b byte) bool { return b >= '0' && b <= '9' }
 
 func mkFinding(ruleID, path string, line, col int, lines []string) finding.Finding {
 	r := rules.MustGet(ruleID)

@@ -55,6 +55,12 @@ docker run --rm -v "$PWD:/src:ro" ghcr.io/smiduweorc/cephalote scan /src
 [GitHub Release](https://github.com/Smiduweorc/Cephalote/releases). Or build
 locally with `make build` (static, zero-cgo).
 
+All of the above - `go install`, the released binaries, and the container -
+ship the **default** zero-cgo profile, which has no Tree-sitter analyzer: the
+thirteen tier-2 languages fall back to the low-confidence regex scan there. For
+high-confidence analysis of those languages, install from the AUR or build the
+Tree-sitter profile yourself (see [Build profiles](#build-profiles-tree-sitter)).
+
 To run Cephalote continuously (on an interval or as a managed daemon) see
 [docs/SCHEDULING.md](docs/SCHEDULING.md) for copy-pasteable Docker, Compose,
 Kubernetes `CronJob`, and systemd examples.
@@ -113,7 +119,7 @@ analyzer it has for that language:
 | Analyzer | Languages | Availability | Confidence |
 |----------|-----------|--------------|------------|
 | Go `go/ast` | Go | built-in | `high` |
-| Tree-sitter | Python | `treesitter` build | `high` |
+| Tree-sitter | Python, JavaScript, TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, Swift, C, C++ | `treesitter` build | `high` |
 | Regex over the scheme catalog | everything else | built-in | `low` |
 
 The Go analyzer reads the actual syntax tree, so it is import-aware and looks at
@@ -122,6 +128,18 @@ values and structure: it flags `rsa.GenerateKey(rand.Reader, 1024)` but not
 IVs. The regex analyzer scans every other language line by line against the
 [algorithm catalog](internal/scheme/scheme.go), which is why those matches are
 reported at low confidence.
+
+The Tree-sitter analyzer works the same way across all thirteen languages. It
+reads dotted names out of the tree, so one entry covers every way a name can be
+qualified (`DES.new` matches `Crypto.Cipher.DES.new`), and it reads the
+arguments, so it separates the real problem from the lookalike:
+`Cipher.getInstance("DES/ECB/PKCS5Padding")` reports both DES and ECB while
+`"AES/GCM/NoPadding"` reports nothing, and `Signature.getInstance("SHA1withRSA")`
+is flagged where `"PBKDF2WithHmacSHA1"` is not. Key sizes are read as values, so
+`new RSACryptoServiceProvider(1024)` is flagged and `4096` is not. Detections
+that would be wrong for a given ecosystem are deliberately absent: Rust's
+`rand::random` and Swift's `arc4random` are CSPRNG-backed, so neither is
+reported as insecure randomness.
 
 ### Build profiles (Tree-sitter)
 
@@ -133,13 +151,19 @@ both cases:
   Tree-sitter analyzer, so Python, JavaScript, and the rest fall back to the
   regex scan.
 - **Tree-sitter** (`make build-treesitter`, i.e. `CGO_ENABLED=1 go build -tags
-  treesitter`): adds real Python AST analysis at high confidence, at the cost of
-  cgo. More grammars plug in behind the same entry point.
+  treesitter`): adds real AST analysis at high confidence for all thirteen
+  languages in the table above, at the cost of cgo.
 
 ```sh
-# High-confidence Python analysis
+# High-confidence analysis for every Tree-sitter language
 CGO_ENABLED=1 go build -tags treesitter -o cephalote-ts ./cmd/cephalote
 ```
+
+A language is supported exactly when it appears in the registry in
+[`internal/engine/ts/lang_specs.go`](internal/engine/ts/lang_specs.go). The
+analyzer itself is language-agnostic, so adding one is a table entry: the
+grammar, the handful of node types it uses for names and calls, and the
+detections.
 
 ### Configuration & suppression
 
@@ -167,11 +191,22 @@ secret := sha1.Sum(x) // cephalote:ignore       (bare form silences the line)
 
 ### Detections
 
-Go (high confidence): weak hashes (MD5, SHA-1, MD4), weak/broken ciphers
-(DES, 3DES, RC4, Blowfish), undersized RSA keys (<2048), insecure randomness
-(`math/rand`), deprecated TLS versions, hardcoded keys, and static/zero IVs.
+**Go** (tier 1, high confidence, built in): weak hashes (MD5, SHA-1, MD4),
+weak/broken ciphers (DES, 3DES, RC4, Blowfish), undersized RSA keys (<2048),
+insecure randomness (`math/rand`), deprecated TLS versions, hardcoded keys, and
+static/zero IVs.
 
-Every other language (low confidence): the full
+**The thirteen Tree-sitter languages** (tier 2, high confidence, `treesitter`
+build): weak hashes, weak/broken ciphers, ECB mode, undersized RSA keys,
+insecure randomness, and deprecated TLS/SSL versions - read from the syntax
+tree through each ecosystem's own API, so the same rule catches Java's
+`Cipher.getInstance("DES/ECB/PKCS5Padding")`, Node's
+`crypto.createCipheriv('des-ede3-cbc', ...)`, Ruby's `OpenSSL::Cipher.new`,
+.NET's `new DESCryptoServiceProvider()`, PHP's `openssl_encrypt`, and
+OpenSSL's `EVP_des_ede3_cbc()`. Hardcoded keys and static IVs are Go-only for
+now.
+
+**Every other language** (tier 3, low confidence): the full
 [scheme catalog](internal/scheme/scheme.go): 50+ algorithms spanning hashes,
 ciphers, modes, asymmetric schemes, KDFs, RNGs, and TLS versions. Run
 `cephalote schemes` to list them.
@@ -196,8 +231,42 @@ make snapshot          # local goreleaser build (no publish)
 make help              # list all targets
 ```
 
+### Tests
+
+Run `make test-all`, not just `make test`: the two build profiles compile
+different code. The default profile builds the Tree-sitter *stub*, so
+`make test` never exercises the tier-2 analyzer at all, and the routing tests
+assert different confidences in each profile.
+
+Every package has tests. Beyond the per-package unit tests, a few are worth
+knowing about because they are what keeps the moving parts honest:
+
+- **Language fixtures** (`internal/engine/ts`): each of the thirteen languages
+  has a weak fixture asserting exact per-rule counts *and* a clean fixture that
+  must produce **zero** findings. The clean half is the important one - a
+  crypto scanner that cries wolf on `AES/GCM/NoPadding` gets switched off.
+- **Registry invariants**: every entry in the detection tables must name a rule
+  the catalog knows (otherwise it panics at scan time rather than test time),
+  and every language routed to tier 2 by `internal/lang` must be registered in
+  the analyzer, so detection and routing cannot drift apart.
+- **Output contracts** (`internal/report`): SARIF is machine-consumed, so the
+  tests pin the things that break ingest silently - empty arrays that must not
+  serialize as `null`, and every result referencing a declared rule.
+- **Exit codes** (`cmd/cephalote`): run as a subprocess, since `--exit-code`
+  calls `os.Exit`. CI gates on these, and 1 (findings) must never be confused
+  with 2 (the tool failed).
+- **Rule ID stability** (`internal/rules`): rule IDs appear in user config and
+  in SARIF history, so renaming one has to be a deliberate act, not a typo.
+
 CI runs gofmt, vet, race tests with coverage, and static cross-compilation for
 `linux/amd64` + `linux/arm64` (Go 1.25/1.26), plus separate jobs for the
 Tree-sitter profile, a GoReleaser config check, and `govulncheck`, on every
 push and PR. Tagging `vX.Y.Z` triggers a GoReleaser release (binaries,
 checksums, `.deb`/`.rpm`).
+
+
+> Latest Personal Notes:
+> Prior to this branch existing, I was debating with myself if I even needed to make this have proper treesitter support for various languages. especially since the regex was actually pretty good at capturing cases.
+> It did not also help that during my tests and experiments this increase in features led the binary to go up to almost 8 times (unstripped) the original size, which is not ideal for a something that calls itself CI friendly.
+> However, the issues I found without using treesitter such as flagging the import and not the call site, or failure to flag in scenarios in `scheme.Scan` dangerous enought I felt the need to actually add it.
+> I am sorry that there was no better way that I could have figured this out. If you have ideas let me know.

@@ -17,8 +17,9 @@ const (
 	TierNone Tier = iota
 	// TierGoAST is the native go/ast analyzer (tier 1).
 	TierGoAST
-	// TierTreeSitter is the Tree-sitter analyzer (tier 2). Not yet
-	// implemented; such files currently fall back to the regex tier.
+	// TierTreeSitter is the Tree-sitter analyzer (tier 2). It is only
+	// compiled into the `treesitter` build; elsewhere such files fall back
+	// to the regex tier.
 	TierTreeSitter
 	// TierRegex is the generic line-by-line regex fallback (tier 3).
 	TierRegex
@@ -33,8 +34,8 @@ type Language struct {
 }
 
 // byExt maps a lowercased file extension to a language name and the highest
-// tier we can currently apply. Languages that would ideally use Tree-sitter
-// are marked TierTreeSitter but fall back to regex until that engine lands.
+// tier we can currently apply. TierTreeSitter languages are analyzed by the
+// tier-2 engine in the `treesitter` build and fall back to regex otherwise.
 var byExt = map[string]Language{
 	".go": {"go", TierGoAST},
 
