@@ -172,3 +172,123 @@ func f() {
 		t.Errorf("local ident md5 should not match import rule, got %v", fs)
 	}
 }
+
+func TestAnalyze_RSAKeySizes(t *testing.T) {
+	cases := []struct {
+		name    string
+		expr    string
+		flagged bool
+	}{
+		{"512", "rsa.GenerateKey(rand.Reader, 512)", true},
+		{"1024", "rsa.GenerateKey(rand.Reader, 1024)", true},
+		{"2047", "rsa.GenerateKey(rand.Reader, 2047)", true},
+		{"2048 is the boundary and is allowed", "rsa.GenerateKey(rand.Reader, 2048)", false},
+		{"4096", "rsa.GenerateKey(rand.Reader, 4096)", false},
+		// A computed or named size is not resolved; flagging it would be a
+		// guess, so these are deliberately silent.
+		{"named constant", "rsa.GenerateKey(rand.Reader, keySize)", false},
+		{"expression", "rsa.GenerateKey(rand.Reader, 512*2)", false},
+		// Malformed calls must not panic or misreport.
+		{"too few args", "rsa.GenerateKey(rand.Reader)", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package x\n\nimport (\n\t\"crypto/rand\"\n\t\"crypto/rsa\"\n)\n\nconst keySize = 1024\n\nfunc f() { _, _ = " + c.expr + " }\n"
+			fs, err := Analyze("a.go", []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := ruleIDs(fs)[rules.RSASmall]
+			if (got > 0) != c.flagged {
+				t.Errorf("%s: rsa findings = %d, want flagged=%v", c.expr, got, c.flagged)
+			}
+		})
+	}
+}
+
+func TestAnalyze_ImportForms(t *testing.T) {
+	cases := []struct {
+		name    string
+		imports string
+		call    string
+		flagged bool
+	}{
+		{"plain", `"crypto/md5"`, "md5.New()", true},
+		{"aliased", `weak "crypto/md5"`, "weak.New()", true},
+		// A blank import binds no name, so a later md5.New() refers to
+		// something else entirely.
+		{"blank import", `_ "crypto/md5"`, "md5.New()", false},
+		// A dot import puts New in scope unqualified; the analyzer does not
+		// resolve that, and must not mistake an unrelated md5.New() for it.
+		{"dot import", `. "crypto/md5"`, "md5.New()", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package x\n\nimport " + c.imports + "\n\nvar md5 struct{ New func() any }\n\nfunc f() { _ = " + c.call + " }\n"
+			if c.name == "plain" || c.name == "aliased" {
+				src = "package x\n\nimport " + c.imports + "\n\nfunc f() { _ = " + c.call + " }\n"
+			}
+			fs, err := Analyze("a.go", []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ruleIDs(fs)[rules.MD5] > 0; got != c.flagged {
+				t.Errorf("%s: flagged = %v, want %v (findings: %v)", c.name, got, c.flagged, ruleIDs(fs))
+			}
+		})
+	}
+}
+
+func TestAnalyze_HardcodedKeyForms(t *testing.T) {
+	cases := []struct {
+		name    string
+		arg     string
+		flagged bool
+	}{
+		{"string literal", `"0123456789abcdef"`, true},
+		{"byte slice conversion", `[]byte("0123456789abcdef")`, true},
+		{"raw string conversion", "[]byte(`0123456789abcdef`)", true},
+		{"byte slice composite", `[]byte{1, 2, 3, 4}`, true},
+		// Not compile-time constants: these are the correct way to do it.
+		{"variable", `key`, false},
+		{"function call", `loadKey()`, false},
+		// A fixed-size array type is not a []byte literal.
+		{"array literal", `[4]byte{1, 2, 3, 4}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package x\n\nimport \"crypto/aes\"\n\nvar key []byte\n\nfunc loadKey() []byte { return nil }\n\nfunc f() { _, _ = aes.NewCipher(" + c.arg + ") }\n"
+			fs, err := Analyze("a.go", []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ruleIDs(fs)[rules.HardcodedKey] > 0; got != c.flagged {
+				t.Errorf("%s: flagged = %v, want %v (findings: %v)", c.arg, got, c.flagged, ruleIDs(fs))
+			}
+		})
+	}
+}
+
+// A file that does not parse must return an error rather than pretending the
+// tree is clean.
+func TestAnalyze_ParseError(t *testing.T) {
+	fs, err := Analyze("a.go", []byte("package x\n\nfunc f( {\n"))
+	if err == nil && len(fs) == 0 {
+		t.Error("a syntactically invalid file reported neither an error nor findings")
+	}
+}
+
+func TestAnalyze_EmptyAndCommentOnlyFiles(t *testing.T) {
+	for _, src := range []string{
+		"package x\n",
+		"package x\n\n// md5 and des are mentioned only in a comment\n",
+	} {
+		fs, err := Analyze("a.go", []byte(src))
+		if err != nil {
+			t.Fatalf("Analyze(%q): %v", src, err)
+		}
+		if len(fs) != 0 {
+			t.Errorf("Analyze(%q) = %+v, want no findings", src, fs)
+		}
+	}
+}
