@@ -91,7 +91,7 @@ func TestDetectShebang_Forms(t *testing.T) {
 }
 
 // Every extension must map to a language whose tier makes sense, and no entry
-// may be blank — a typo here silently drops a whole file type.
+// may be blank - a typo here silently drops a whole file type.
 func TestByExtTableIsWellFormed(t *testing.T) {
 	for ext, l := range byExt {
 		if ext == "" || ext[0] != '.' {

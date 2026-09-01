@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# release.sh — cut a new release for Cephalote.
+# release.sh - cut a new release for Cephalote.
 #
 # Flow:
 #   1. sanity-check the working tree and branch

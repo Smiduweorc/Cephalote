@@ -635,7 +635,7 @@ func TestEveryTableEntryNamesAKnownRule(t *testing.T) {
 
 // A grammar shape that names a field the grammar does not have would silently
 // stop matching, so every spec must at least produce findings on its own
-// fixture — enforced by TestAnalyzeLanguages — and declare a usable syntax.
+// fixture - enforced by TestAnalyzeLanguages - and declare a usable syntax.
 func TestEverySpecIsUsable(t *testing.T) {
 	for lang, sp := range specs {
 		if sp.syntax.language == nil {

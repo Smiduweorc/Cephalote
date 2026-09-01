@@ -1,7 +1,7 @@
 {
   "name": "cephalote",
   "version": "0.0.0",
-  "description": "Dev tooling for Cephalote: git hooks, commit linting, and changelog generation. The shipped artifact is a Go binary — this manifest only wires up the release workflow.",
+  "description": "Dev tooling for Cephalote: git hooks, commit linting, and changelog generation. The shipped artifact is a Go binary - this manifest only wires up the release workflow.",
   "type": "module",
   "private": true,
   "scripts": {
