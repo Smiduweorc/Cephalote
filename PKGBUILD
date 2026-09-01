@@ -17,7 +17,7 @@ options=('!debug')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 # Refresh on every pkgver bump with `updpkgsums` (pacman-contrib); it needs the
 # tagged tarball to be published upstream first.
-sha256sums=('e5472d7a2fffd31b821d6f9b5cdd1e3700825ad080e73b6c9d027e6f362f4ce9')
+sha256sums=('2718b54ace0b72f59cbe7b19e2702a66332a9d214c6689601e06bb7a2d88d270')
 
 prepare() {
 	cd "$_repo-$pkgver"
