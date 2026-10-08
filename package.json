@@ -14,6 +14,6 @@
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.1.0",
     "git-cliff": "^2.14.2",
-    "lefthook": "^2.1.14"
+    "lefthook": "^2.1.16"
   }
 }
