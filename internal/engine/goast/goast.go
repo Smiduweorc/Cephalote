@@ -6,8 +6,10 @@ package goast
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"strconv"
 	"strings"
 
@@ -82,6 +84,7 @@ func Analyze(path string, src []byte) ([]finding.Finding, error) {
 
 	lines := splitLines(src)
 	imports := importMap(file)
+	consts := constValues(fset, file)
 
 	var out []finding.Finding
 	emit := func(ruleID string, pos token.Pos) {
@@ -121,7 +124,12 @@ func Analyze(path string, src []byte) ([]finding.Finding, error) {
 
 		// Value-dependent: RSA key size.
 		if pkgPath == "crypto/rsa" && (fn == "GenerateKey" || fn == "GenerateMultiPrimeKey") {
-			if bits, ok := rsaKeyBits(call); ok && bits < 2048 {
+			// GenerateMultiPrimeKey takes (random, nprimes, bits).
+			idx := 1
+			if fn == "GenerateMultiPrimeKey" {
+				idx = 2
+			}
+			if bits, ok := rsaKeyBits(call, idx, consts); ok && bits < 2048 {
 				emit(rules.RSASmall, call.Pos())
 			}
 		}
@@ -170,8 +178,8 @@ func Analyze(path string, src []byte) ([]finding.Finding, error) {
 }
 
 // importMap returns local-name -> import-path for a file. The local name is
-// the explicit alias when present, otherwise the final path segment (which
-// matches the package name for all packages we care about here).
+// the explicit alias when present, otherwise the name the package is declared
+// with, which importName derives from the path.
 func importMap(file *ast.File) map[string]string {
 	m := make(map[string]string)
 	for _, imp := range file.Imports {
@@ -179,10 +187,7 @@ func importMap(file *ast.File) map[string]string {
 		if err != nil {
 			continue
 		}
-		name := p
-		if i := strings.LastIndex(p, "/"); i >= 0 {
-			name = p[i+1:]
-		}
+		name := importName(p)
 		if imp.Name != nil {
 			if imp.Name.Name == "_" || imp.Name.Name == "." {
 				continue
@@ -194,22 +199,99 @@ func importMap(file *ast.File) map[string]string {
 	return m
 }
 
+// importName guesses the package name an unaliased import binds. The final
+// path segment is right for most packages, but not for a major-version suffix:
+// `math/rand/v2` declares `package rand`, so the name is the segment before
+// the `/vN`. A gopkg.in-style `yaml.v3` drops its `.vN` the same way.
+func importName(path string) string {
+	segs := strings.Split(path, "/")
+	name := segs[len(segs)-1]
+	if len(segs) > 1 && isMajorVersion(name) {
+		name = segs[len(segs)-2]
+	}
+	if i := strings.LastIndex(name, "."); i > 0 && isMajorVersion(name[i+1:]) {
+		name = name[:i]
+	}
+	return name
+}
+
+// isMajorVersion reports whether s looks like a module major-version
+// suffix: "v" followed by one or more digits.
+func isMajorVersion(s string) bool {
+	if len(s) < 2 || s[0] != 'v' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// constValues type-checks the file on its own and returns the constant value
+// of every expression that has one, so `rsa.GenerateKey(r, keySize)` with
+// `const keySize = 1024`, or `512*2`, resolves to the size it really asks for.
+// Scoping, shadowing and iota come from go/types rather than a guess.
+//
+// Imports are not resolved: every package is stood in for by an empty one, and
+// the type errors that follow are expected and ignored. That only costs the
+// constants defined in other packages, which a single file cannot see anyway.
+func constValues(fset *token.FileSet, file *ast.File) map[ast.Expr]constant.Value {
+	info := &types.Info{Types: make(map[ast.Expr]types.TypeAndValue)}
+	conf := types.Config{
+		Importer: emptyImporter{},
+		Error:    func(error) {},
+	}
+	_, _ = conf.Check(file.Name.Name, fset, []*ast.File{file}, info)
+
+	out := make(map[ast.Expr]constant.Value)
+	for e, tv := range info.Types {
+		if tv.Value != nil {
+			out[e] = tv.Value
+		}
+	}
+	return out
+}
+
+// emptyImporter satisfies every import with an empty, complete package named
+// as importName would bind it.
+type emptyImporter struct{}
+
+func (emptyImporter) Import(path string) (*types.Package, error) {
+	pkg := types.NewPackage(path, importName(path))
+	pkg.MarkComplete()
+	return pkg, nil
+}
+
 // rsaKeyBits extracts the integer key-size argument from an rsa.GenerateKey
-// call (the 2nd argument). It only resolves untyped integer literals; computed
-// sizes are left to deeper analysis and not flagged here to avoid noise.
-func rsaKeyBits(call *ast.CallExpr) (int, bool) {
-	if len(call.Args) < 2 {
+// call (argument idx). A literal, a named constant, or a constant
+// expression all resolve; a size only known at run time is left alone rather
+// than guessed at.
+func rsaKeyBits(call *ast.CallExpr, idx int, consts map[ast.Expr]constant.Value) (int, bool) {
+	if len(call.Args) <= idx {
 		return 0, false
 	}
-	lit, ok := call.Args[1].(*ast.BasicLit)
+	arg := call.Args[idx]
+	if v, ok := consts[arg]; ok {
+		if v = constant.ToInt(v); v.Kind() == constant.Int {
+			if n, exact := constant.Int64Val(v); exact {
+				return int(n), true
+			}
+		}
+		return 0, false
+	}
+	// The type-checker records nothing for an argument it gave up on, so
+	// keep the plain literal path as a floor.
+	lit, ok := arg.(*ast.BasicLit)
 	if !ok || lit.Kind != token.INT {
 		return 0, false
 	}
-	n, err := strconv.Atoi(lit.Value)
+	n, err := strconv.ParseInt(lit.Value, 0, 64)
 	if err != nil {
 		return 0, false
 	}
-	return n, true
+	return int(n), true
 }
 
 func mkFinding(ruleID, path string, p token.Position, lines []string) finding.Finding {

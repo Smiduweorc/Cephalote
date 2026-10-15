@@ -184,16 +184,25 @@ func TestAnalyze_RSAKeySizes(t *testing.T) {
 		{"2047", "rsa.GenerateKey(rand.Reader, 2047)", true},
 		{"2048 is the boundary and is allowed", "rsa.GenerateKey(rand.Reader, 2048)", false},
 		{"4096", "rsa.GenerateKey(rand.Reader, 4096)", false},
-		// A computed or named size is not resolved; flagging it would be a
-		// guess, so these are deliberately silent.
-		{"named constant", "rsa.GenerateKey(rand.Reader, keySize)", false},
-		{"expression", "rsa.GenerateKey(rand.Reader, 512*2)", false},
+		// Named constants and constant expressions resolve to their value.
+		{"named constant", "rsa.GenerateKey(rand.Reader, keySize)", true},
+		{"strong named constant", "rsa.GenerateKey(rand.Reader, strongSize)", false},
+		{"expression", "rsa.GenerateKey(rand.Reader, 512*2)", true},
+		{"strong expression", "rsa.GenerateKey(rand.Reader, 1<<12)", false},
+		{"constant built from constants", "rsa.GenerateKey(rand.Reader, derived)", true},
+		{"typed constant", "rsa.GenerateKey(rand.Reader, typedSize)", true},
+		{"hex literal", "rsa.GenerateKey(rand.Reader, 0x400)", true},
+		// The size is the third argument here; nprimes is not a key size.
+		{"multi-prime weak", "rsa.GenerateMultiPrimeKey(rand.Reader, 3, keySize)", true},
+		{"multi-prime strong", "rsa.GenerateMultiPrimeKey(rand.Reader, 3, 4096)", false},
+		// A size only known at run time is not guessed at.
+		{"variable", "rsa.GenerateKey(rand.Reader, runtimeSize)", false},
 		// Malformed calls must not panic or misreport.
 		{"too few args", "rsa.GenerateKey(rand.Reader)", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			src := "package x\n\nimport (\n\t\"crypto/rand\"\n\t\"crypto/rsa\"\n)\n\nconst keySize = 1024\n\nfunc f() { _, _ = " + c.expr + " }\n"
+			src := "package x\n\nimport (\n\t\"crypto/rand\"\n\t\"crypto/rsa\"\n)\n\nconst keySize = 1024\nconst strongSize = 4096\nconst derived = keySize / 2\nconst typedSize int = 768\n\nvar runtimeSize = 1024\n\nfunc f() { _, _ = " + c.expr + " }\n"
 			fs, err := Analyze("a.go", []byte(src))
 			if err != nil {
 				t.Fatal(err)
@@ -203,6 +212,74 @@ func TestAnalyze_RSAKeySizes(t *testing.T) {
 				t.Errorf("%s: rsa findings = %d, want flagged=%v", c.expr, got, c.flagged)
 			}
 		})
+	}
+}
+
+func TestAnalyze_RSAKeySizeScoping(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		flagged bool
+	}{
+		{"local constant", "func f() {\n\tconst bits = 1024\n\t_, _ = rsa.GenerateKey(rand.Reader, bits)\n}\n", true},
+		{"local constant shadows a weak one", "const bits = 1024\n\nfunc f() {\n\tconst bits = 4096\n\t_, _ = rsa.GenerateKey(rand.Reader, bits)\n}\n", false},
+		{"local variable shadows a weak constant", "const bits = 1024\n\nfunc f() {\n\tbits := 4096\n\t_, _ = rsa.GenerateKey(rand.Reader, bits)\n}\n", false},
+		{"iota", "const (\n\tsmall = (iota + 1) * 1024\n\tlarge\n)\n\nfunc f() { _, _ = rsa.GenerateKey(rand.Reader, small) }\n", true},
+		{"parameter", "func f(bits int) { _, _ = rsa.GenerateKey(rand.Reader, bits) }\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package x\n\nimport (\n\t\"crypto/rand\"\n\t\"crypto/rsa\"\n)\n\n" + c.src
+			fs, err := Analyze("a.go", []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ruleIDs(fs)[rules.RSASmall] > 0; got != c.flagged {
+				t.Errorf("flagged = %v, want %v", got, c.flagged)
+			}
+		})
+	}
+}
+
+func TestAnalyze_VersionedImportPath(t *testing.T) {
+	cases := []struct {
+		name    string
+		imports string
+		call    string
+		flagged bool
+	}{
+		// math/rand/v2 declares package rand: the name is not "v2".
+		{"math/rand/v2", `"math/rand/v2"`, "rand.IntN(3)", true},
+		{"math/rand/v2 aliased", `mr "math/rand/v2"`, "mr.IntN(3)", true},
+		{"math/rand", `"math/rand"`, "rand.Intn(3)", true},
+		{"crypto/rand is not weak", `"crypto/rand"`, "rand.Int(nil, nil)", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "package x\n\nimport " + c.imports + "\n\nfunc f() { _, _ = " + c.call + ", 0 }\n"
+			fs, err := Analyze("a.go", []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := ruleIDs(fs)[rules.WeakRand] > 0; got != c.flagged {
+				t.Errorf("flagged = %v, want %v (findings: %v)", got, c.flagged, ruleIDs(fs))
+			}
+		})
+	}
+}
+
+func TestImportName(t *testing.T) {
+	for path, want := range map[string]string{
+		"crypto/md5":          "md5",
+		"math/rand/v2":        "rand",
+		"gopkg.in/yaml.v3":    "yaml",
+		"example.com/mod/v10": "mod",
+		"v2":                  "v2",
+		"example.com/vx":      "vx",
+	} {
+		if got := importName(path); got != want {
+			t.Errorf("importName(%q) = %q, want %q", path, got, want)
+		}
 	}
 }
 
