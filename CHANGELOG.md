@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-10-15
+
+### Bug Fixes
+
+- Corrected import names behaviour which could lead to math/rand/v2 from failing
+
+### Miscellaneous Tasks
+
+- Fix sha256sum for v0.1.0
+- Bump lefthook from 2.1.10 to 2.1.12 in the dev-tooling group
+- Bump fast-uri from 3.1.5 to 3.1.7
+- Bumped go to minimum version
+- Bump the dev-tooling group across 1 directory with 4 updates
+- Bump js-yaml from 4.3.1 to 4.3.2
+- Bump lefthook from 2.1.14 to 2.1.16 in the dev-tooling group
+- Bump lefthook from 2.1.16 to 2.2.1 in the dev-tooling group
+- Updated various test and comments to match changes
+
+### Security
+
+- Skip dependabot deps-dev commits and match security in any case
+
 ## [0.1.0] - 2026-09-01
 
 ### Bug Fixes
