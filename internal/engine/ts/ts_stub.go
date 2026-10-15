@@ -1,9 +1,10 @@
-//go:build !treesitter
+//go:build !cgo
 
-// Package ts is the tier-2 Tree-sitter analyzer. Tree-sitter grammars require
-// cgo, which conflicts with the default single-static-binary (CGO_ENABLED=0)
-// build. This stub is compiled into the default profile; build with
-// `-tags treesitter` (and CGO enabled) to get the real implementation.
+// Package ts is the tier-2 Tree-sitter analyzer. Tree-sitter grammars are C
+// and need cgo; this stub is only compiled when cgo is disabled
+// (CGO_ENABLED=0), which no shipped build does. Released binaries are linked
+// statically against musl instead, so they are still single static files.
+// `cephalote --version` says which one a binary is.
 package ts
 
 import "github.com/Smiduweorc/Cephalote/internal/finding"

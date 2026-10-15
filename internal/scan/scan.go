@@ -203,7 +203,7 @@ func (r *runner) detect(path string, src []byte) (fs []finding.Finding, skipped 
 		return fs, false, nil
 	case lang.TierTreeSitter:
 		// Use the tier-2 Tree-sitter analyzer when it is compiled in (the
-		// `treesitter` build) and supports this language; otherwise fall back
+		// cgo build) and supports this language; otherwise fall back
 		// to the tier-3 regex scan.
 		if ts.Available() && ts.Supported(l.Name) {
 			fs, err = ts.Analyze(l.Name, path, src)

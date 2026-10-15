@@ -1,4 +1,4 @@
-//go:build treesitter
+//go:build cgo
 
 package ts
 
@@ -479,7 +479,7 @@ func TestEveryTierTwoLanguageIsRegistered(t *testing.T) {
 
 func TestAvailable(t *testing.T) {
 	if !Available() {
-		t.Error("Available() = false in the treesitter build")
+		t.Error("Available() = false in a cgo build")
 	}
 }
 

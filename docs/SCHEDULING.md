@@ -19,15 +19,14 @@ separate volume. The examples emit SARIF (for code-scanning ingest); swap
 > itself. The scheduling images below use a small Alpine layer so they can loop
 > or run `cron`.
 
-> **Which analyzer you get.** The build stages below use `CGO_ENABLED=0`, the
-> default profile, which has no Tree-sitter analyzer. Go files are still
-> analyzed at high confidence, but the thirteen tier-2 languages (Python,
-> JavaScript, TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, Swift, C,
-> C++) fall back to the low-confidence regex scan. That matters here because
-> every example below passes `--min-confidence high`: on a codebase that is
-> mostly Python or Java, a zero-cgo scheduled scan will report **nothing**.
-> Either drop `--min-confidence high`, or build the Tree-sitter profile - see
-> [Tree-sitter scheduled scans](#tree-sitter-scheduled-scans) below.
+> **Which analyzer you get.** The build stages below compile with cgo and link
+> statically against Alpine's musl, which is what puts the Tree-sitter
+> analyzer in: the thirteen tier-2 languages (Python, JavaScript, TypeScript,
+> Java, Kotlin, Scala, C#, Ruby, PHP, Rust, Swift, C, C++) are analyzed at high
+> confidence, so `--min-confidence high` below drops nothing that matters. Do
+> not change the build to `CGO_ENABLED=0`: that compiles without Tree-sitter,
+> and on a mostly-Python or Java codebase a high-confidence scan would then
+> report **nothing**.
 
 ---
 
@@ -39,13 +38,15 @@ between scans. Everything is configurable via environment variables.
 ### `Dockerfile.schedule`
 
 ```dockerfile
-# ---- build the static binary ----
+# ---- build the static binary (Tree-sitter included) ----
 FROM golang:1.25-alpine AS build
+RUN apk add --no-cache build-base
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" \
+RUN CGO_ENABLED=1 go build -trimpath \
+      -ldflags "-s -w -linkmode external -extldflags -static" \
       -o /out/cephalote ./cmd/cephalote
 
 # ---- runtime: binary + a shell to loop in ----
@@ -166,28 +167,6 @@ spec:
 ```
 
 ---
-
-### Tree-sitter scheduled scans
-
-To get high-confidence findings for the tier-2 languages, swap the build stage
-for the cgo profile. The runtime image is already Alpine, so it just needs the
-matching C library; the rest of the file is unchanged.
-
-```dockerfile
-# ---- build the Tree-sitter binary (cgo) ----
-FROM golang:1.27-alpine AS build
-RUN apk add --no-cache gcc musl-dev
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=1 go build -tags treesitter -trimpath -ldflags "-s -w" \
-      -o /out/cephalote ./cmd/cephalote
-```
-
-The binary is no longer fully static, so it must run on a glibc/musl-compatible
-runtime image rather than `FROM scratch`. The Alpine runtime used above is
-already compatible; keep the `--from=build` copy line as it is.
 
 ## 2. Daemon with systemd
 

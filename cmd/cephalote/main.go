@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/Smiduweorc/Cephalote/internal/config"
+	"github.com/Smiduweorc/Cephalote/internal/engine/ts"
 	"github.com/Smiduweorc/Cephalote/internal/finding"
 	"github.com/Smiduweorc/Cephalote/internal/report"
 	"github.com/Smiduweorc/Cephalote/internal/scan"
@@ -28,13 +29,23 @@ func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "cephalote",
 		Short:         "Scan source code for weak cryptographic schemes",
-		Version:       version,
+		Version:       versionString(),
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
 	root.AddCommand(scanCmd())
 	root.AddCommand(schemesCmd())
 	return root
+}
+
+// versionString reports whether the Tree-sitter tier is compiled in, so a
+// binary built with CGO_ENABLED=0 (regex-only for non-Go languages) cannot
+// pass for a full one.
+func versionString() string {
+	if ts.Available() {
+		return version + " (tree-sitter)"
+	}
+	return version + " (no tree-sitter: built with CGO_ENABLED=0)"
 }
 
 func scanCmd() *cobra.Command {

@@ -1,4 +1,4 @@
-//go:build treesitter
+//go:build cgo
 
 package ts
 

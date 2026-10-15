@@ -36,7 +36,7 @@ func TestRun_RoutingAndFiltering(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "a.go", "package a\nimport \"crypto/md5\"\nvar _ = md5.New()\n")
 	// Ruby is a tier-2 language, so its finding is high confidence in the
-	// treesitter profile and low (regex) in the default one.
+	// cgo build and low (regex) in a CGO_ENABLED=0 one.
 	writeFile(t, dir, "b.rb", "require 'digest'\nDigest::MD5.hexdigest('x')\n")
 	writeFile(t, dir, "vendor/skip.go", "package v\nimport \"crypto/md5\"\nvar _ = md5.New()\n")
 	writeFile(t, dir, "notes.txt", "uses md5 somewhere\n")

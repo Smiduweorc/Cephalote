@@ -4,8 +4,8 @@
 
 Cephalote scans a source tree for weak and broken cryptography (MD5, DES, RC4,
 undersized RSA keys, hardcoded keys, and so on) and tells you where it found
-them. It's a single static binary with no runtime dependencies, meant to drop
-onto a server or into CI without fuss.
+them. It's a single static binary with no runtime dependencies, Tree-sitter analysis
+included, meant to drop onto a server or into CI without fuss.
 
 ## Install
 
@@ -26,11 +26,8 @@ cd cephalote
 makepkg -si
 ```
 
-The AUR package ships the **Tree-sitter** profile. The zero-cgo default exists
-so a single binary can be dropped onto a machine with no toolchain; a package
-that compiles on your own machine has no such constraint, so it takes the tier
-that detects more (see [Build profiles](#build-profiles-tree-sitter)). It
-installs the binary to `/usr/bin/cephalote`, shell completions for bash, zsh,
+The AUR package is built with Tree-sitter like every other channel, linked
+against the system libc rather than statically. It installs the binary to `/usr/bin/cephalote`, shell completions for bash, zsh,
 and fish, and the annotated config plus scheduling guide under
 `/usr/share/doc/cephalote/`.
 
@@ -47,19 +44,22 @@ go install github.com/Smiduweorc/Cephalote/cmd/cephalote@latest
 # Released binary (Linux/macOS, amd64/arm64)
 curl -sSfL https://raw.githubusercontent.com/Smiduweorc/Cephalote/master/install.sh | sh
 
-# Container (scratch image, ~static binary)
+# Container (scratch image, static binary)
 docker run --rm -v "$PWD:/src:ro" ghcr.io/smiduweorc/cephalote scan /src
 ```
 
 `.deb`/`.rpm` packages and checksummed archives are attached to each
 [GitHub Release](https://github.com/Smiduweorc/Cephalote/releases). Or build
-locally with `make build` (static, zero-cgo).
+locally with `make build` (see [Building](#building-tree-sitter-and-static-linking)).
 
-All of the above - `go install`, the released binaries, and the container -
-ship the **default** zero-cgo profile, which has no Tree-sitter analyzer: the
-thirteen tier-2 languages fall back to the low-confidence regex scan there. For
-high-confidence analysis of those languages, install from the AUR or build the
-Tree-sitter profile yourself (see [Build profiles](#build-profiles-tree-sitter)).
+Every channel above ships the Tree-sitter analyzer. The Linux release binaries
+and the container image are fully static (musl), so they run on any Linux
+with nothing installed. The macOS binaries link only against the system
+`libSystem`, which macOS does not allow to be linked statically. `go install`
+needs a C compiler on the machine, as any cgo package does; with
+`CGO_ENABLED=0` it still builds, but without Tree-sitter.
+`cephalote --version` says which you have: `(tree-sitter)`, or
+`(no tree-sitter: built with CGO_ENABLED=0)`.
 
 To run Cephalote continuously (on an interval or as a managed daemon) see
 [docs/SCHEDULING.md](docs/SCHEDULING.md) for copy-pasteable Docker, Compose,
@@ -119,12 +119,14 @@ analyzer it has for that language:
 | Analyzer | Languages | Availability | Confidence |
 |----------|-----------|--------------|------------|
 | Go `go/ast` | Go | built-in | `high` |
-| Tree-sitter | Python, JavaScript, TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, Swift, C, C++ | `treesitter` build | `high` |
+| Tree-sitter | Python, JavaScript, TypeScript, Java, Kotlin, Scala, C#, Ruby, PHP, Rust, Swift, C, C++ | built-in | `high` |
 | Regex over the scheme catalog | everything else | built-in | `low` |
 
 The Go analyzer reads the actual syntax tree, so it is import-aware and looks at
 values and structure: it flags `rsa.GenerateKey(rand.Reader, 1024)` but not
-`4096`, follows renamed imports, and spots hardcoded keys and static or zero
+`4096`, resolves sizes given as constants or constant expressions
+(`const bits = 1024`, `512*2`), follows renamed and versioned imports
+(`math/rand/v2`), and spots hardcoded keys and static or zero
 IVs. The regex analyzer scans every other language line by line against the
 [algorithm catalog](internal/scheme/scheme.go), which is why those matches are
 reported at low confidence.
@@ -141,23 +143,27 @@ that would be wrong for a given ecosystem are deliberately absent: Rust's
 `rand::random` and Swift's `arc4random` are CSPRNG-backed, so neither is
 reported as insecure randomness.
 
-### Build profiles (Tree-sitter)
+### Building (Tree-sitter and static linking)
 
-Tree-sitter grammars require cgo, which pulls against the goal of shipping a
-single static `CGO_ENABLED=0` binary. There are two build profiles to cover
-both cases:
-
-- **Default** (`make build`, `go install`): pure-Go, fully static. There is no
-  Tree-sitter analyzer, so Python, JavaScript, and the rest fall back to the
-  regex scan.
-- **Tree-sitter** (`make build-treesitter`, i.e. `CGO_ENABLED=1 go build -tags
-  treesitter`): adds real AST analysis at high confidence for all thirteen
-  languages in the table above, at the cost of cgo.
+Tree-sitter grammars are C, so Cephalote is a cgo program. The release
+binaries are still single static files: they are linked statically against
+musl, using [zig](https://ziglang.org) as a cross-compiling C toolchain.
 
 ```sh
-# High-confidence analysis for every Tree-sitter language
-CGO_ENABLED=1 go build -tags treesitter -o cephalote-ts ./cmd/cephalote
+make build      # static Linux binary for this machine's arch (needs zig)
+make cross      # static linux/amd64 + linux/arm64 (needs zig)
+make build-dev  # quick build with the host C compiler, dynamically linked
 ```
+
+Without zig, any musl toolchain works the same way, e.g. on Alpine:
+
+```sh
+CGO_ENABLED=1 go build -ldflags "-linkmode external -extldflags -static" ./cmd/cephalote
+```
+
+`CGO_ENABLED=0` still compiles, with a stub in place of the analyzer, so the
+thirteen Tree-sitter languages fall back to the low-confidence regex scan. No
+shipped build does this, and `--version` marks such a binary.
 
 A language is supported exactly when it appears in the registry in
 [`internal/engine/ts/lang_specs.go`](internal/engine/ts/lang_specs.go). The
@@ -193,11 +199,10 @@ secret := sha1.Sum(x) // cephalote:ignore       (bare form silences the line)
 
 **Go** (tier 1, high confidence, built in): weak hashes (MD5, SHA-1, MD4),
 weak/broken ciphers (DES, 3DES, RC4, Blowfish), undersized RSA keys (<2048),
-insecure randomness (`math/rand`), deprecated TLS versions, hardcoded keys, and
+insecure randomness (`math/rand`, `math/rand/v2`), deprecated TLS versions, hardcoded keys, and
 static/zero IVs.
 
-**The thirteen Tree-sitter languages** (tier 2, high confidence, `treesitter`
-build): weak hashes, weak/broken ciphers, ECB mode, undersized RSA keys,
+**The thirteen Tree-sitter languages** (tier 2, high confidence, built in): weak hashes, weak/broken ciphers, ECB mode, undersized RSA keys,
 insecure randomness, and deprecated TLS/SSL versions - read from the syntax
 tree through each ecosystem's own API, so the same rule catches Java's
 `Cipher.getInstance("DES/ECB/PKCS5Padding")`, Node's
@@ -222,10 +227,10 @@ ciphers, modes, asymmetric schemes, KDFs, RNGs, and TLS versions. Run
 ## Development
 
 ```sh
-make build             # static, zero-cgo binary
-make build-treesitter  # cgo binary with the Tree-sitter analyzer
-make test              # race + coverage (default profile)
-make test-all          # both profiles
+make build             # static binary with Tree-sitter (needs zig)
+make build-dev         # host-toolchain build, dynamically linked
+make test              # race + coverage, Tree-sitter included
+make test-all          # also with CGO_ENABLED=0 (the stub)
 make fmt vet           # formatting + go vet
 make snapshot          # local goreleaser build (no publish)
 make help              # list all targets
@@ -233,10 +238,9 @@ make help              # list all targets
 
 ### Tests
 
-Run `make test-all`, not just `make test`: the two build profiles compile
-different code. The default profile builds the Tree-sitter *stub*, so
-`make test` never exercises the tier-2 analyzer at all, and the routing tests
-assert different confidences in each profile.
+`make test-all` also runs the suite with `CGO_ENABLED=0`, which compiles the
+Tree-sitter stub instead of the analyzer; the routing tests assert the
+regex fallback there.
 
 Every package has tests. Beyond the per-package unit tests, a few are worth
 knowing about because they are what keeps the moving parts honest:
@@ -258,11 +262,11 @@ knowing about because they are what keeps the moving parts honest:
 - **Rule ID stability** (`internal/rules`): rule IDs appear in user config and
   in SARIF history, so renaming one has to be a deliberate act, not a typo.
 
-CI runs gofmt, vet, race tests with coverage, and static cross-compilation for
-`linux/amd64` + `linux/arm64` (Go 1.25/1.26), plus separate jobs for the
-Tree-sitter profile, a GoReleaser config check, and `govulncheck`, on every
-push and PR. Tagging `vX.Y.Z` triggers a GoReleaser release (binaries,
-checksums, `.deb`/`.rpm`).
+CI runs gofmt, vet, race tests with coverage with and without cgo (Go
+1.25/1.26), a static musl build for `linux/amd64` + `linux/arm64` that checks
+the binaries are static and carry Tree-sitter, a GoReleaser config check, and `govulncheck`, on every
+push and PR. Tagging `vX.Y.Z` triggers a GoReleaser release (static Linux binaries,
+checksums, `.deb`/`.rpm`), and a macOS runner adds the darwin binaries.
 
 
 > Latest Personal Notes:

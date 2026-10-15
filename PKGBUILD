@@ -34,11 +34,10 @@ build() {
 	export CGO_LDFLAGS="${LDFLAGS}"
 	export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
 
-	# Upstream ships two profiles: a zero-cgo static default (built to be
-	# scp'd onto a server) and a cgo "treesitter" build that adds real AST
-	# analysis at high confidence for thirteen languages. A distro package is compiled
-	# on the user's machine against a toolchain that is already there, so
-	# the static profile buys nothing - take the tier that detects more.
+	# Tree-sitter is compiled into every cgo build. Upstream's release
+	# binaries link it statically against musl; a distro package links
+	# dynamically against the system libc like everything else, which is
+	# why this is a plain cgo build with no static flags.
 	#
 	# main.version is what lands in SARIF output as the tool version, so it
 	# uses the bare pkgver to match the official GoReleaser binaries, whose
@@ -46,7 +45,7 @@ build() {
 	#
 	# No -s -w: leave symbol handling to makepkg's own strip option rather
 	# than hardcoding it here.
-	go build -tags treesitter \
+	CGO_ENABLED=1 go build \
 		-ldflags "-linkmode=external -X main.version=$pkgver" \
 		-o build/cephalote ./cmd/cephalote
 
@@ -58,8 +57,8 @@ build() {
 
 check() {
 	cd "$_repo-$pkgver"
-	# Same tag as build(), so the tier that ships is the tier that is tested.
-	go test -tags treesitter ./...
+	# cgo on, as in build(), so the tier that ships is the tier that is tested.
+	CGO_ENABLED=1 go test ./...
 }
 
 package() {

@@ -1,7 +1,7 @@
-//go:build treesitter
+//go:build cgo
 
-// Package ts is the tier-2 Tree-sitter analyzer. This build (tag `treesitter`,
-// cgo enabled) provides real AST analysis for every language in the registry
+// Package ts is the tier-2 Tree-sitter analyzer. This build (any cgo-enabled
+// build, which is every shipped binary) provides real AST analysis for every language in the registry
 // in lang_specs.go. The analyzer itself is language-agnostic: it walks the
 // tree, renders dotted names out of whatever nodes the grammar uses for them,
 // and matches those names against per-language tables. Adding a language means

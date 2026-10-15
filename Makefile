@@ -3,31 +3,39 @@ PKG         := ./cmd/cephalote
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS     := -s -w -X main.version=$(VERSION)
 
+# Tree-sitter is C, so a binary that has it needs cgo. Linking that statically
+# against musl, with zig as the C toolchain, keeps it a single file with no
+# runtime dependencies on any Linux.
+ZIG_ARCH    := $(subst arm64,aarch64,$(subst amd64,x86_64,$(shell go env GOARCH)))
+STATIC_LD   := -linkmode external -extldflags '-static -s'
+zigcc        = CC="zig cc -target $(1)-linux-musl" CXX="zig c++ -target $(1)-linux-musl"
+
 .DEFAULT_GOAL := build
 
-## build: static, zero-cgo binary (default ship profile)
+## build: static Linux binary with Tree-sitter (needs zig)
 .PHONY: build
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
+	CGO_ENABLED=1 $(call zigcc,$(ZIG_ARCH)) go build -trimpath \
+		-ldflags "$(LDFLAGS) $(STATIC_LD)" -o $(BINARY) $(PKG)
 
-## build-treesitter: cgo binary with the tier-2 Tree-sitter analyzer
-.PHONY: build-treesitter
-build-treesitter:
-	CGO_ENABLED=1 go build -tags treesitter -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY)-ts $(PKG)
+## build-dev: host-toolchain build with Tree-sitter, dynamically linked
+.PHONY: build-dev
+build-dev:
+	CGO_ENABLED=1 go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)
 
-## test: run the default test suite (race + coverage)
+## test: run the test suite (race + coverage), Tree-sitter included
 .PHONY: test
 test:
-	go test -race -coverprofile=coverage.out ./...
+	CGO_ENABLED=1 go test -race -coverprofile=coverage.out ./...
 
-## test-treesitter: run tests with the Tree-sitter tier enabled
-.PHONY: test-treesitter
-test-treesitter:
-	CGO_ENABLED=1 go test -tags treesitter ./...
+## test-nocgo: run tests with cgo off, which compiles the Tree-sitter stub
+.PHONY: test-nocgo
+test-nocgo:
+	CGO_ENABLED=0 go test ./...
 
-## test-all: both profiles
+## test-all: both
 .PHONY: test-all
-test-all: test test-treesitter
+test-all: test test-nocgo
 
 ## fmt: format and report non-compliant files
 .PHONY: fmt
@@ -40,11 +48,11 @@ fmt:
 vet:
 	go vet ./...
 
-## cross: static binaries for the primary server targets
+## cross: static Tree-sitter binaries for the primary server targets (needs zig)
 .PHONY: cross
 cross:
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_linux_amd64 $(PKG)
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(LDFLAGS)" -o dist/$(BINARY)_linux_arm64 $(PKG)
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 $(call zigcc,x86_64) go build -trimpath -ldflags "$(LDFLAGS) $(STATIC_LD)" -o dist/$(BINARY)_linux_amd64 $(PKG)
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 $(call zigcc,aarch64) go build -trimpath -ldflags "$(LDFLAGS) $(STATIC_LD)" -o dist/$(BINARY)_linux_arm64 $(PKG)
 
 ## snapshot: build a local goreleaser snapshot (no publish)
 .PHONY: snapshot
@@ -70,7 +78,7 @@ docker:
 ## clean: remove build artifacts
 .PHONY: clean
 clean:
-	rm -rf $(BINARY) $(BINARY)-ts dist coverage.out
+	rm -rf $(BINARY) dist coverage.out
 
 ## help: list targets
 .PHONY: help

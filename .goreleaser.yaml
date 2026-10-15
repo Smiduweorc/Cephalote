@@ -10,20 +10,34 @@ builds:
   - id: cephalote
     main: ./cmd/cephalote
     binary: cephalote
-    # Default profile: fully static, zero-cgo. The scp-to-server build.
-    # (The Tree-sitter tier needs cgo and is shipped separately, not here.)
+    # Tree-sitter is C, so this is a cgo build, linked statically against
+    # musl with zig as the C toolchain: one file, no runtime dependencies,
+    # and the full analyzer. macOS cannot be linked statically and needs
+    # Apple's SDK, so the darwin binaries are built on a macOS runner in
+    # .github/workflows/release.yml and attached to the same release.
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     flags:
       - -trimpath
     ldflags:
       - -s -w -X main.version={{ .Version }}
+      - -linkmode external -extldflags '-static -s'
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
       - arm64
+    overrides:
+      - goos: linux
+        goarch: amd64
+        env:
+          - CC=zig cc -target x86_64-linux-musl
+          - CXX=zig c++ -target x86_64-linux-musl
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=zig cc -target aarch64-linux-musl
+          - CXX=zig c++ -target aarch64-linux-musl
 
 archives:
   - id: default

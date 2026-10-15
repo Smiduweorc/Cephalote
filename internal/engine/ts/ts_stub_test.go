@@ -1,4 +1,4 @@
-//go:build !treesitter
+//go:build !cgo
 
 package ts
 
@@ -10,7 +10,7 @@ import "testing"
 // produce nothing.
 func TestStubReportsUnavailable(t *testing.T) {
 	if Available() {
-		t.Error("Available() = true without the treesitter build tag")
+		t.Error("Available() = true with cgo disabled")
 	}
 	for _, lang := range []string{
 		"python", "javascript", "typescript", "java", "kotlin", "scala",
