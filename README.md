@@ -188,12 +188,21 @@ custom_schemes:
     remediation: "Use a vetted AEAD cipher."
 ```
 
-Individual findings can be silenced inline (any language) with a comment:
+Individual findings can be silenced inline, in any comment syntax (`//`, `#`,
+`--`, `;`, `/* */`, `<!-- -->`), on the finding's line or the line above:
 
 ```go
 h := md5.New() // cephalote:ignore weak-hash-md5
-secret := sha1.Sum(x) // cephalote:ignore       (bare form silences the line)
+h, s := md5.New(), sha1.New() // cephalote:ignore weak-hash-md5, weak-hash-sha1 legacy interop
+secret := sha1.Sum(x) // cephalote:ignore legacy checksum
 ```
+
+The grammar is `cephalote:ignore [id ...] [reason]`. Ids are separated by
+commas or spaces; each is a built-in rule id, `all`, or a `scheme:<name>`. The
+first word that is none of those starts the reason, which runs to the end of
+the comment. With no ids (a bare directive, or only a reason) everything on the
+line is silenced. A misspelled rule id therefore reads as a reason and silences
+the whole line; a `scheme:` id that matches no scheme silences nothing.
 
 ### Detections
 

@@ -3,6 +3,9 @@ package scan
 import (
 	"regexp"
 	"strings"
+	"unicode"
+
+	"github.com/Smiduweorc/Cephalote/internal/rules"
 )
 
 // globMatcher matches a path against a compiled glob. Patterns without a slash
@@ -69,25 +72,52 @@ func globToRegex(glob string) string {
 	return b.String()
 }
 
-// ignoreRe captures an inline suppression directive and its optional id list.
-var ignoreRe = regexp.MustCompile(`cephalote:ignore\b[ \t]*([\w:.,\-]*)`)
+// ignoreRe finds an inline suppression directive and captures the rest of
+// the line after it.
+var ignoreRe = regexp.MustCompile(`cephalote:ignore\b(.*)`)
 
-// suppressed reports whether a source line silences a finding with ruleID. A
-// bare `cephalote:ignore` (or `cephalote:ignore all`) silences everything on
-// the line; otherwise only the listed ids are silenced.
+// commentClosers end the comment a directive sits in; nothing after one
+// belongs to the directive.
+var commentClosers = []string{"*/", "-->"}
+
+// suppressed reports whether a source line silences a finding with ruleID.
+//
+// The grammar is `cephalote:ignore [id ...] [reason]`. Ids are separated by
+// commas or whitespace, and each is a built-in rule id, `all`, or any
+// `scheme:<name>`. The first word that is none of those starts a free-text
+// reason, which runs to the end of the comment. With no ids the directive is
+// bare and silences everything on the line; so does `all`.
 func suppressed(line, ruleID string) bool {
 	m := ignoreRe.FindStringSubmatch(line)
 	if m == nil {
 		return false
 	}
-	ids := strings.TrimSpace(m[1])
-	if ids == "" || ids == "all" {
-		return true
-	}
-	for _, id := range strings.FieldsFunc(ids, func(r rune) bool { return r == ',' || r == ' ' }) {
-		if id == ruleID {
-			return true
+	rest := m[1]
+	for _, c := range commentClosers {
+		if i := strings.Index(rest, c); i >= 0 {
+			rest = rest[:i]
 		}
 	}
-	return false
+	words := strings.FieldsFunc(rest, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+	listed := false
+	for _, w := range words {
+		if !isRuleID(w) {
+			break
+		}
+		if w == "all" || w == ruleID {
+			return true
+		}
+		listed = true
+	}
+	return !listed
+}
+
+// isRuleID reports whether a directive word names a rule rather than starting
+// the reason. Any scheme: word counts, so a custom scheme needs no registry.
+func isRuleID(w string) bool {
+	if w == "all" || strings.HasPrefix(w, "scheme:") {
+		return true
+	}
+	_, ok := rules.Get(w)
+	return ok
 }

@@ -28,19 +28,47 @@ func TestGlobMatch(t *testing.T) {
 
 func TestSuppressed(t *testing.T) {
 	cases := []struct {
-		line, rule string
-		want       bool
+		name, line, rule string
+		want             bool
 	}{
-		{"x := md5.New() // cephalote:ignore", "weak-hash-md5", true},
-		{"x := md5.New() // cephalote:ignore weak-hash-md5", "weak-hash-md5", true},
-		{"x := md5.New() // cephalote:ignore weak-hash-sha1", "weak-hash-md5", false},
-		{"x := md5.New() # cephalote:ignore weak-hash-md5,weak-cipher-des", "weak-cipher-des", true},
-		{"x := md5.New()", "weak-hash-md5", false},
-		{"x := md5.New() // cephalote:ignore all", "anything", true},
+		{"a bare directive silences every rule", "x := md5.New() // cephalote:ignore", "weak-hash-md5", true},
+		{"a listed id is silenced", "x := md5.New() // cephalote:ignore weak-hash-md5", "weak-hash-md5", true},
+		{"an id that is not listed is not silenced", "x := md5.New() // cephalote:ignore weak-hash-sha1", "weak-hash-md5", false},
+		{"no directive silences nothing", "x := md5.New()", "weak-hash-md5", false},
+		{"all silences every rule", "x := md5.New() // cephalote:ignore all", "anything", true},
+		{"a comma list honours every id", "x # cephalote:ignore weak-hash-md5,weak-cipher-des", "weak-cipher-des", true},
+		{"a comma-and-space list honours every id", "x # cephalote:ignore weak-hash-md5, weak-cipher-des", "weak-cipher-des", true},
+		{"a space list honours the first id", "x // cephalote:ignore weak-hash-md5 weak-cipher-des", "weak-hash-md5", true},
+		{"a space list honours the second id", "x // cephalote:ignore weak-hash-md5 weak-cipher-des", "weak-cipher-des", true},
+		{"a space list leaves unlisted ids alone", "x // cephalote:ignore weak-hash-md5 weak-cipher-des", "weak-hash-sha1", false},
+		{"a reason alone is a bare directive", "x // cephalote:ignore legacy checksum", "weak-hash-md5", true},
+		{"a reason alone silences scheme ids too", "x // cephalote:ignore legacy checksum", "scheme:md5", true},
+		{"a reason after an id keeps the id list", "x // cephalote:ignore weak-hash-md5 legacy checksum", "weak-hash-md5", true},
+		{"a reason after an id does not widen the list", "x // cephalote:ignore weak-hash-md5 legacy checksum", "weak-hash-sha1", false},
+		{"a reason that names a rule id after it starts is still reason", "x // cephalote:ignore weak-hash-md5 legacy, not weak-hash-sha1", "weak-hash-sha1", false},
+		{"a reason may follow all", "x // cephalote:ignore all generated code", "weak-hash-sha1", true},
+		{"a scheme id is honoured", "x # cephalote:ignore scheme:md5", "scheme:md5", true},
+		{"a scheme id does not silence the built-in rule", "x # cephalote:ignore scheme:md5", "weak-hash-md5", false},
+		{"an unknown scheme id is an id that silences nothing else", "x # cephalote:ignore scheme:nope", "scheme:md5", false},
+		{"a custom scheme id is honoured", "x # cephalote:ignore scheme:internal-xor", "scheme:internal-xor", true},
+		{"a misspelled id reads as reason and silences the line", "x // cephalote:ignore weak-hash-md55", "weak-hash-md5", true},
+		{"the directive must stand alone", "x // cephalote:ignored weak-hash-sha1", "weak-hash-md5", false},
+		{"an upper-case id is not a rule id, so it starts the reason", "x // cephalote:ignore WEAK-HASH-MD5 weak-hash-sha1", "weak-hash-sha1", true},
+		{"a block comment closer is not part of the id", "x /* cephalote:ignore weak-hash-md5*/", "weak-hash-md5", true},
+		{"a block comment closer does not widen the list", "x /* cephalote:ignore weak-hash-md5 */", "weak-hash-sha1", false},
+		{"an html comment closer is not part of the id", "<!-- cephalote:ignore weak-hash-md5-->", "weak-hash-md5", true},
+		{"an html comment closer does not widen the list", "<!-- cephalote:ignore weak-hash-md5 -->", "weak-hash-sha1", false},
+		{"code after a block comment is not reason or id", "x /* cephalote:ignore weak-hash-md5 */ weak-hash-sha1", "weak-hash-sha1", false},
+		{"a tab separates ids", "x // cephalote:ignore\tweak-hash-md5\tweak-hash-sha1", "weak-hash-sha1", true},
+		{"an sql comment carries the directive", "SELECT md5(x) -- cephalote:ignore scheme:md5", "scheme:md5", true},
+		{"a lisp comment carries the directive", "(md5 x) ; cephalote:ignore scheme:md5", "scheme:md5", true},
+		{"a basic comment carries the directive", "x = MD5(y) ' cephalote:ignore scheme:md5", "scheme:md5", true},
 	}
 	for _, c := range cases {
-		if got := suppressed(c.line, c.rule); got != c.want {
-			t.Errorf("suppressed(%q, %q) = %v, want %v", c.line, c.rule, got, c.want)
-		}
+		t.Run(c.name, func(t *testing.T) {
+			if got := suppressed(c.line, c.rule); got != c.want {
+				t.Errorf("suppressed(%q, %q) = %v, want %v", c.line, c.rule, got, c.want)
+			}
+		})
 	}
 }
