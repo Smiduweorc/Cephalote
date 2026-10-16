@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-10-16
+
+### Bug Fixes
+
+- Parse ignore directives as an id list followed by a free-text reason
+
+### Miscellaneous Tasks
+
+- Bump to 0.2.0
+
 ## [0.2.0] - 2026-10-15
 
 ### Bug Fixes
