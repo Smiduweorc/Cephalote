@@ -384,3 +384,60 @@ func TestRun_SeverityOverrideAndDisableApplyToSchemeFindings(t *testing.T) {
 		t.Errorf("findings = %+v, want the rule disabled", res.Findings)
 	}
 }
+
+func TestRun_SuppressionWithReasonInEveryCommentSyntax(t *testing.T) {
+	cases := []struct {
+		name, file, weak, comment string
+	}{
+		{"go line comment", "a.go", "package a\nimport \"crypto/md5\"\nvar _ = md5.New()", " // cephalote:ignore legacy checksum"},
+		{"go block comment", "b.go", "package a\nimport \"crypto/md5\"\nvar _ = md5.New()", " /* cephalote:ignore legacy checksum */"},
+		{"python hash comment", "a.py", "import hashlib\nhashlib.md5(b'x')", "  # cephalote:ignore legacy checksum"},
+		{"javascript line comment", "a.js", "const c = require('crypto');\nc.createHash('md5');", " // cephalote:ignore legacy checksum"},
+		{"c block comment", "a.c", "void f(void) { MD5(d, n, out); }", " /* cephalote:ignore legacy checksum */"},
+		{"ruby hash comment", "a.rb", "require 'digest'\nDigest::MD5.hexdigest('x')", " # cephalote:ignore legacy checksum"},
+		{"php hash comment", "a.php", "<?php\n$h = md5('x');", " # cephalote:ignore legacy checksum"},
+		{"sql dash comment", "a.sql", "SELECT md5(x) FROM t;", " -- cephalote:ignore legacy checksum"},
+		{"html comment", "a.html", "<p>md5 here</p>", " <!-- cephalote:ignore legacy checksum -->"},
+		{"ini semicolon comment", "a.ini", "hash = md5", " ; cephalote:ignore legacy checksum"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			opts := Options{MinConfidence: finding.Low, IncludeUnknown: true}
+
+			plain := t.TempDir()
+			writeFile(t, plain, c.file, c.weak+"\n")
+			res, err := Run(plain, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Findings) == 0 {
+				t.Fatalf("the fixture must produce a finding without the directive")
+			}
+
+			silenced := t.TempDir()
+			writeFile(t, silenced, c.file, c.weak+c.comment+"\n")
+			res, err = Run(silenced, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Findings) != 0 {
+				t.Errorf("a directive with only a reason should silence the line: %+v", res.Findings)
+			}
+		})
+	}
+}
+
+func TestRun_SuppressionSpaceSeparatedIDList(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.go",
+		"package a\nimport (\"crypto/md5\"; \"crypto/sha1\"; \"crypto/des\")\n"+
+			"var _, _ = md5.New(), sha1.New() // cephalote:ignore weak-hash-md5 weak-hash-sha1 legacy interop\n"+
+			"var _, _ = md5.New(), des.NewCipher(nil) // cephalote:ignore weak-hash-md5 vendor format\n")
+	res, err := Run(dir, Options{MinConfidence: finding.Low})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Findings) != 1 || res.Findings[0].RuleID != "weak-cipher-des" {
+		t.Errorf("only the unlisted des finding should remain: %+v", res.Findings)
+	}
+}
