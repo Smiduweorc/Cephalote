@@ -1,39 +1,21 @@
 # Running Cephalote on a schedule
 
-Cephalote is a one-shot CLI: it scans a directory, prints findings, and exits.
-To keep a codebase continuously checked you wrap that one-shot run in something
-that repeats it. This guide shows two patterns:
+Cephalote scans once and exits. To run it on a schedule, wrap it in a sleep
+loop, cron, a Kubernetes `CronJob` or a systemd timer. Every example mounts the
+source read-only and emits SARIF; use `--format json` or `--format text` if you
+prefer.
 
-1. **[Interval container](#1-interval-container)**: a self-contained Docker
-   image that re-scans every *N* seconds. Simplest to drop into Docker Compose.
-2. **[Daemon / systemd service](#2-daemon-with-systemd)**: manage Cephalote as
-   a background service on a Linux host, either on a timer or as a long-running
-   daemon.
+The project's [`Dockerfile`](../Dockerfile) builds a `FROM scratch` image with
+no shell, so it can't loop or run `cron` itself. The scheduling images below
+add a small Alpine layer for that.
 
-Both mount your source tree **read-only** (`:ro`) and write results to a
-separate volume. The examples emit SARIF (for code-scanning ingest); swap
-`--format json` or `--format text` as you like.
+Keep cgo on in these builds. With `CGO_ENABLED=0` there is no Tree-sitter, and
+`--min-confidence high` on a Python or Java tree reports nothing.
 
-> The project's default [`Dockerfile`](../Dockerfile) builds a `FROM scratch`
-> image with no shell, ideal for `docker run`, but it can't host a scheduler
-> itself. The scheduling images below use a small Alpine layer so they can loop
-> or run `cron`.
+## Interval container
 
-> **Which analyzer you get.** The build stages below compile with cgo and link
-> statically against Alpine's musl, which is what puts the Tree-sitter
-> analyzer in: the thirteen tier-2 languages (Python, JavaScript, TypeScript,
-> Java, Kotlin, Scala, C#, Ruby, PHP, Rust, Swift, C, C++) are analyzed at high
-> confidence, so `--min-confidence high` below drops nothing that matters. Do
-> not change the build to `CGO_ENABLED=0`: that compiles without Tree-sitter,
-> and on a mostly-Python or Java codebase a high-confidence scan would then
-> report **nothing**.
-
----
-
-## 1. Interval container
-
-A tiny Alpine image that runs Cephalote in a loop, sleeping `INTERVAL` seconds
-between scans. Everything is configurable via environment variables.
+An Alpine image that scans in a loop, sleeping `INTERVAL` seconds between
+scans. The settings are environment variables.
 
 ### `Dockerfile.schedule`
 
@@ -108,10 +90,10 @@ docker compose up -d
 docker compose logs -f cephalote
 ```
 
-### Variant: real `cron` (run at specific clock times)
+### cron at fixed times
 
-A sleep loop drifts and always starts at container boot. For "every day at
-02:00" use Alpine's `crond` instead:
+A sleep loop drifts and starts at container boot. For "every day at 02:00" use
+Alpine's `crond`:
 
 ```dockerfile
 # Dockerfile.cron  (build stage identical to above)
@@ -129,10 +111,9 @@ docker run -d --name cephalote-cron \
   -v /path/to/code:/src:ro -v "$PWD/reports:/results" cephalote-cron
 ```
 
-### Variant: no extra image (host cron + the scratch image)
+### Host cron with the scratch image
 
-If you'd rather not build a scheduler image, let the host's cron invoke the
-default `scratch` container:
+Or let the host's cron run the default `scratch` container:
 
 ```cron
 # crontab -e: scan hourly, gate on findings, log the exit code
@@ -140,7 +121,7 @@ default `scratch` container:
             scan /src --exit-code --format sarif >> /var/log/cephalote.sarif 2>&1
 ```
 
-### Variant: Kubernetes `CronJob`
+### Kubernetes `CronJob`
 
 ```yaml
 apiVersion: batch/v1
@@ -166,17 +147,12 @@ spec:
                 claimName: source-pvc
 ```
 
----
+## systemd
 
-## 2. Daemon with systemd
+### Service and timer
 
-On a plain Linux host, let `systemd` own the lifecycle. There are two idioms.
-
-### 2a. Service + timer (recommended for intervals)
-
-A **oneshot** service does a single scan; a **timer** triggers it on a
-schedule. This is the systemd-native equivalent of cron and gives you
-`journalctl` logs, retries, and `systemctl list-timers` visibility.
+A oneshot service runs one scan and a timer triggers it. Logs go to
+`journalctl`, and `systemctl list-timers` shows the next run.
 
 `/etc/systemd/system/cephalote.service`:
 
@@ -224,15 +200,14 @@ systemctl list-timers cephalote.timer      # confirm next run
 journalctl -u cephalote.service -f         # watch results
 ```
 
-> Prefer the binary over Docker? Install it with
-> [`install.sh`](../install.sh) and set
-> `ExecStart=/usr/local/bin/cephalote scan /srv/code --format sarif`, and drop the
-> `docker.service` dependency.
+Without Docker, install the binary with [`install.sh`](../install.sh), set
+`ExecStart=/usr/local/bin/cephalote scan /srv/code --format sarif`, and drop the
+`docker.service` dependency.
 
-### 2b. Long-running daemon container
+### Long-running daemon container
 
-If you want a single always-on process (the interval-container from part 1, but
-supervised by systemd rather than Docker's restart policy):
+The interval container above, supervised by systemd instead of Docker's
+restart policy:
 
 `/etc/systemd/system/cephalote-daemon.service`:
 
@@ -272,18 +247,5 @@ docker run -d --name cephalote-daemon --restart always \
   cephalote-scheduler
 ```
 
----
-
-## Picking an approach
-
-| You want | Use |
-|---|---|
-| Self-contained, fixed gap between runs | [Interval container](#1-interval-container) (sleep loop) |
-| Runs at specific clock times, in a container | [`cron` variant](#variant-real-cron-run-at-specific-clock-times) |
-| Orchestrated cluster | [Kubernetes `CronJob`](#variant-kubernetes-cronjob) |
-| A managed service on a Linux host, on a schedule | [systemd service + timer](#2a-service--timer-recommended-for-intervals) |
-| One always-on supervised process | [Long-running daemon](#2b-long-running-daemon-container) |
-
-Gate CI or alerting on results by adding `--exit-code` (exit `1` when findings
-are present) and checking the run's exit status; reserve exit `2` for real
-errors.
+Add `--exit-code` to gate CI or alerting on findings: exit 1 means findings,
+exit 2 is a real error.
