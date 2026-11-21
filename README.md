@@ -216,6 +216,11 @@ flagging the import and not the call site, or failing to flag some cases in
 that there was no better way I could figure out. If you have ideas, let me
 know.
 
+## Security
+
+Security advisories are in [ADVISORIES.md](./ADVISORIES.md). To report a
+vulnerability, see [SECURITY.md](./SECURITY.md).
+
 ## License
 
 MIT, see [LICENSE](./LICENSE).
