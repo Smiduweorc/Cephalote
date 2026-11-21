@@ -1,7 +1,3 @@
----
-title: Security advisories
----
-
 # Security advisories
 
 Every security advisory published for Cephalote, newest first. Each links to its
