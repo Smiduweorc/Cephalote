@@ -37,6 +37,11 @@ test-nocgo:
 .PHONY: test-all
 test-all: test test-nocgo
 
+## fuzz: fuzz every target (FUZZTIME=30s by default)
+.PHONY: fuzz
+fuzz:
+	CGO_ENABLED=1 scripts/fuzz.sh $(or $(FUZZTIME),30s)
+
 ## fmt: format and report non-compliant files
 .PHONY: fmt
 fmt:
